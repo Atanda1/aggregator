@@ -3,6 +3,7 @@ module github.com/paycrest/aggregator
 go 1.22.0
 
 require (
+	github.com/JGLTechnologies/gin-rate-limit v1.5.4
 	github.com/anaskhan96/base58check v0.0.0-20181220122047-b05365d494c4
 	github.com/btcsuite/btcd/btcec/v2 v2.3.2
 	github.com/chadsr/logrus-sentry v0.4.1

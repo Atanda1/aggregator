@@ -86,12 +86,11 @@ func (s *IndexerService) IndexERC20Transfer(ctx context.Context, client types.RP
 	}
 
 	// Connect to RPC endpoint
-	retryErr := utils.Retry(3, 1*time.Second, func() error {
+	if client == nil {
 		client, err = types.NewEthClient(token.Edges.Network.RPCEndpoint)
-		return err
-	})
-	if retryErr != nil {
-		return retryErr
+		if err != nil {
+			return err
+		}
 	}
 
 	// Initialize contract filterer
@@ -111,32 +110,33 @@ func (s *IndexerService) IndexERC20Transfer(ctx context.Context, client types.RP
 
 	// Fetch logs
 	var iter *contracts.ERC20TokenTransferIterator
-	retryErr = utils.Retry(3, 1*time.Second, func() error {
-		var err error
 
-		addresses := []common.Address{}
+	addresses := []common.Address{}
+	if startBlock == 0 {
 		if addressToWatch != "" {
+			fromBlock := int64(500)
+			if token.Edges.Network.Identifier != "bnb-smart-chain" {
+				fromBlock = 5000
+			}
 			addresses = []common.Address{common.HexToAddress(addressToWatch)}
-			startBlock = int64(toBlock) - 5000
+			startBlock = int64(toBlock) - fromBlock
 		} else {
 			startBlock = int64(toBlock) - 100
 		}
+	}
 
-		// if strings.Contains(token.Edges.Network.Identifier, "arbitrum") {
-		// 	startBlock = 268964400
-		// 	toBlock = 268964450
-		// }
+	// if strings.Contains(token.Edges.Network.Identifier, "arbitrum") {
+	// 	startBlock = 268964400
+	// 	toBlock = 268964450
+	// }
 
-		iter, err = filterer.FilterTransfer(&bind.FilterOpts{
-			Start: uint64(startBlock),
-			End:   &toBlock,
-		}, nil, addresses)
-
+	iter, err = filterer.FilterTransfer(&bind.FilterOpts{
+		Start: uint64(startBlock),
+		End:   &toBlock,
+	}, nil, addresses)
+	if err != nil {
+		logger.Errorf("IndexERC20Transfer.FilterTransfer(%s): %v", token.Edges.Network.Identifier, err)
 		return err
-	})
-	if retryErr != nil {
-		logger.Errorf("IndexERC20Transfer.FilterTransfer(%s): %v", token.Edges.Network.Identifier, retryErr)
-		return retryErr
 	}
 
 	// Iterate over logs
@@ -412,13 +412,9 @@ func (s *IndexerService) IndexOrderCreated(ctx context.Context, client types.RPC
 
 	// Connect to RPC endpoint
 	if client == nil {
-		retryErr := utils.Retry(3, 1*time.Second, func() error {
-			client, err = types.NewEthClient(network.RPCEndpoint)
+		client, err = types.NewEthClient(network.RPCEndpoint)
+		if err != nil {
 			return err
-		})
-		if retryErr != nil {
-			logger.Errorf("IndexOrderCreated.NewEthClient: %v", retryErr)
-			return retryErr
 		}
 	}
 
@@ -432,44 +428,26 @@ func (s *IndexerService) IndexOrderCreated(ctx context.Context, client types.RPC
 	// Fetch current block header
 	header, err := client.HeaderByNumber(ctx, nil)
 	if err != nil {
-		logger.Errorf("IndexOrderCreated.HeaderByNumber: %v", err)
+		if err != context.Canceled {
+			logger.Errorf("IndexOrderCreated.HeaderByNumber: %v", err)
+		}
 		return err
 	}
 	toBlock := header.Number.Uint64()
 
-	// Fetch last indexed lock order
-	// lastIndexedOrder, err := db.Client.LockPaymentOrder.
-	// 	Query().
-	// 	Where(
-	// 		lockpaymentorder.HasTokenWith(
-	// 			token.HasNetworkWith(
-	// 				networkent.IdentifierEQ(network.Identifier),
-	// 			),
-	// 		),
-	// 	).
-	// 	Order(ent.Desc(lockpaymentorder.FieldBlockNumber)).
-	// 	Select(lockpaymentorder.FieldBlockNumber).
-	// 	First(ctx)
-	// if err != nil {
-	// 	if !ent.IsNotFound(err) {
-	// 		logger.Errorf("IndexOrderCreated.FetchLastIndexedBlock: %v", err)
-	// 	}
-	// }
-
 	// Fetch logs
 	var iter *contracts.GatewayOrderCreatedIterator
-	retryErr := utils.Retry(3, 1*time.Second, func() error {
-		iter, err = filterer.FilterOrderCreated(&bind.FilterOpts{
-			Start: uint64(int64(toBlock) - 1000000),
-			End:   &toBlock,
-		}, nil, nil, nil)
+	fromBlock := int64(1000000)
+	if network.Identifier == "bnb-smart-chain" {
+		fromBlock = 10000
+	}
+	iter, err = filterer.FilterOrderCreated(&bind.FilterOpts{
+		Start: uint64(int64(toBlock) - fromBlock),
+		End:   &toBlock,
+	}, nil, nil, nil)
+	if err != nil {
+		logger.Errorf("IndexOrderCreated.FilterOrderCreated (%s): %v", network.Identifier, err)
 		return err
-	})
-	if retryErr != nil {
-		if !strings.Contains(retryErr.Error(), "json: cannot unmarshal string into Go struct field") {
-			logger.Errorf("IndexOrderCreated.FilterOrderCreated (%s): %v", network.Identifier, retryErr)
-		}
-		return retryErr
 	}
 
 	// Iterate over logs
@@ -573,13 +551,9 @@ func (s *IndexerService) IndexOrderSettled(ctx context.Context, client types.RPC
 
 	// Connect to RPC endpoint
 	if client == nil {
-		retryErr := utils.Retry(3, 1*time.Second, func() error {
-			client, err = types.NewEthClient(network.RPCEndpoint)
+		client, err = types.NewEthClient(network.RPCEndpoint)
+		if err != nil {
 			return err
-		})
-		if retryErr != nil {
-			logger.Errorf("IndexOrderSettled.NewEthClient: %v", retryErr)
-			return retryErr
 		}
 	}
 
@@ -593,23 +567,22 @@ func (s *IndexerService) IndexOrderSettled(ctx context.Context, client types.RPC
 	// Filter logs from the oldest indexed to the latest
 	header, err := client.HeaderByNumber(ctx, nil)
 	if err != nil {
-		logger.Errorf("IndexOrderSettled.HeaderByNumber: %v", err)
+		if err != context.Canceled {
+			logger.Errorf("IndexOrderSettled.HeaderByNumber: %v", err)
+		}
 		return err
 	}
 	toBlock := header.Number.Uint64()
 
 	// Fetch logs
 	var iter *contracts.GatewayOrderSettledIterator
-	retryErr := utils.Retry(3, 1*time.Second, func() error {
-		iter, err = filterer.FilterOrderSettled(&bind.FilterOpts{
-			Start: uint64(int64(toBlock) - 5000),
-			End:   &toBlock,
-		}, nil, nil)
+	iter, err = filterer.FilterOrderSettled(&bind.FilterOpts{
+		Start: uint64(int64(toBlock) - 5000),
+		End:   &toBlock,
+	}, nil, nil)
+	if err != nil {
+		logger.Errorf("IndexOrderSettled.FilterOrderSettled: %v", err)
 		return err
-	})
-	if retryErr != nil {
-		logger.Errorf("IndexOrderSettled.FilterOrderSettled: %v", retryErr)
-		return retryErr
 	}
 
 	// Iterate over logs
@@ -709,13 +682,9 @@ func (s *IndexerService) IndexOrderRefunded(ctx context.Context, client types.RP
 
 	// Connect to RPC endpoint
 	if client == nil {
-		retryErr := utils.Retry(3, 1*time.Second, func() error {
-			client, err = types.NewEthClient(network.RPCEndpoint)
+		client, err = types.NewEthClient(network.RPCEndpoint)
+		if err != nil {
 			return err
-		})
-		if retryErr != nil {
-			logger.Errorf("IndexOrderRefunded.NewEthClient: %v", err)
-			return retryErr
 		}
 	}
 
@@ -729,23 +698,22 @@ func (s *IndexerService) IndexOrderRefunded(ctx context.Context, client types.RP
 	// Filter logs from the oldest indexed to the latest
 	header, err := client.HeaderByNumber(ctx, nil)
 	if err != nil {
-		logger.Errorf("IndexOrderRefunded.HeaderByNumber: %v", err)
+		if err != context.Canceled {
+			logger.Errorf("IndexOrderRefunded.HeaderByNumber: %v", err)
+		}
 		return err
 	}
 	toBlock := header.Number.Uint64()
 
 	// Fetch logs
 	var iter *contracts.GatewayOrderRefundedIterator
-	retryErr := utils.Retry(3, 1*time.Second, func() error {
-		iter, err = filterer.FilterOrderRefunded(&bind.FilterOpts{
-			Start: uint64(int64(toBlock) - 5000),
-			End:   &toBlock,
-		}, nil)
+	iter, err = filterer.FilterOrderRefunded(&bind.FilterOpts{
+		Start: uint64(int64(toBlock) - 5000),
+		End:   &toBlock,
+	}, nil)
+	if err != nil {
+		logger.Errorf("IndexOrderRefunded.FilterOrderRefunded: %v", err)
 		return err
-	})
-	if retryErr != nil {
-		logger.Errorf("IndexOrderRefunded.FilterOrderRefunded: %v", retryErr)
-		return retryErr
 	}
 
 	// Iterate over logs
@@ -1961,14 +1929,9 @@ func (s *IndexerService) checkAMLCompliance(rpcUrl string, txHash string) (bool,
 	// Make RPC call to Shield3 here
 	var err error
 	var client *rpc.Client
-	if client == nil {
-		retryErr := utils.Retry(3, 1*time.Second, func() error {
-			client, err = rpc.Dial(rpcUrl)
-			return err
-		})
-		if retryErr != nil {
-			return false, fmt.Errorf("failed to connect to RPC client: %v", err)
-		}
+	client, err = rpc.Dial(rpcUrl)
+	if err != nil {
+		return false, fmt.Errorf("failed to connect to RPC client: %v", err)
 	}
 
 	var result json.RawMessage
